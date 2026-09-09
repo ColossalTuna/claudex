@@ -1,0 +1,27 @@
+# hadolint configuration for claudex.
+#
+# Every ignored rule is a deliberate design decision, documented here so that
+# nobody has to reverse-engineer the reasoning from the Containerfile.
+
+ignored:
+  # DL3008 "pin versions in apt-get install"
+  # Debian removes superseded package versions from the mirror, so exact pins
+  # break the build within weeks. The base image is pinned by digest instead,
+  # which fixes the package set for a given digest without the breakage.
+  - DL3008
+
+  # DL3016 "pin versions in npm install"
+  # The agent packages float on purpose: the whole point of the image is to
+  # carry the newest Claude Code and Codex, and a running container can upgrade
+  # itself. Pin them per build with --build-arg when reproducibility matters.
+  - DL3016
+
+  # DL3009 "delete the apt-get lists after installing"
+  # The lists live on a BuildKit cache mount, so they never enter a layer and
+  # deleting them would only defeat the cache.
+  - DL3009
+
+failure-threshold: warning
+
+trustedRegistries:
+  - docker.io

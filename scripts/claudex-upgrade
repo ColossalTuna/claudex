@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# Upgrade the agents in a running container, without root and without a rebuild.
+#
+# The agents live in /opt/npm-global, which is owned by the runtime user, so
+# this works from inside a running container. The upgrade lasts as long as the
+# container's writable layer: a restarted container is back to the image's
+# version, which is the intended behaviour.
+#
+# Usage: claudex-upgrade [claude|codex|all]   (default: whichever agent is installed)
+set -euo pipefail
+
+log() { printf 'claudex: %s\n' "$*" >&2; }
+
+target="${1:-auto}"
+
+if [[ ! -w /opt/npm-global ]]; then
+  log "/opt/npm-global is not writable by uid $(id -u); cannot upgrade in place."
+  exit 1
+fi
+
+upgrade_claude() {
+  log "upgrading @anthropic-ai/claude-code"
+  npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION:-latest}"
+  claude --version
+}
+
+upgrade_codex() {
+  log "upgrading @openai/codex"
+  npm install -g "@openai/codex@${CODEX_VERSION:-latest}"
+  codex --version
+}
+
+case "$target" in
+  claude) upgrade_claude ;;
+  codex)  upgrade_codex ;;
+  all)    upgrade_claude; upgrade_codex ;;
+  auto)
+    found=0
+    command -v claude >/dev/null 2>&1 && { upgrade_claude; found=1; }
+    command -v codex  >/dev/null 2>&1 && { upgrade_codex;  found=1; }
+    [[ "$found" -eq 1 ]] || { log "no agent found on PATH"; exit 1; }
+    ;;
+  *)
+    log "usage: claudex-upgrade [claude|codex|all]"
+    exit 64
+    ;;
+esac

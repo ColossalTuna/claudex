@@ -1,0 +1,41 @@
+{{- if eq .Values.workspace.type "pvc" }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "claudex.fullname" . }}-workspace
+  labels:
+    {{- include "claudex.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.workspace.size }}
+  {{- with .Values.workspace.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
+{{- if .Values.home.persist }}
+{{- range $agent := list "claude" "codex" }}
+{{- if (index $.Values $agent).enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  # The refreshed agent credential is written here. Without persistence the
+  # login reverts to the seeded Secret on every restart and eventually expires.
+  name: {{ include "claudex.fullname" $ }}-{{ $agent }}-home
+  labels:
+    {{- include "claudex.labels" $ | nindent 4 }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ $.Values.home.size }}
+  {{- with $.Values.home.storageClass }}
+  storageClassName: {{ . }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

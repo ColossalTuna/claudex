@@ -1,0 +1,37 @@
+{
+  "name": "claudex",
+
+  // Swap to claudex-codex to get Codex instead, or claudex-base for neither.
+  // Pin the tag to a release once one exists; :latest tracks the newest tag.
+  "image": "ghcr.io/colossaltuna/claudex-claude:latest",
+
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+
+  // The agents live in /opt/npm-global, not in HOME, so mounting a volume over
+  // /home/dev is safe and is what makes an agent login survive a rebuild.
+  "mounts": [
+    "source=claudex-home,target=/home/dev,type=volume"
+  ],
+
+  "remoteUser": "dev",
+  "containerUser": "dev",
+
+  "remoteEnv": {
+    "CLAUDEX_WORKDIR": "/workspace"
+  },
+
+  // The image's own entrypoint does the UID repair, credential seeding and
+  // trust pre-acceptance, so it must not be overridden.
+  "overrideCommand": true,
+
+  "postCreateCommand": "claudex-smoke",
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code"
+      ]
+    }
+  }
+}

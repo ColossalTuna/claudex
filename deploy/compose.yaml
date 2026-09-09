@@ -1,0 +1,48 @@
+# Reference compose stack: both agents against one shared workspace.
+#
+# This is the local mirror of the Helm chart. The one behavioural difference is
+# networking: containers in a Kubernetes pod share a network namespace, so the
+# agents reach each other on 127.0.0.1, while here they reach each other by
+# service name (codex:9742).
+#
+#   CLAUDEX_WORKSPACE=/path/to/repo docker compose -f deploy/compose.yaml up
+#
+# Claude Code's Remote Control server needs a TTY, hence tty + stdin_open.
+
+name: claudex
+
+services:
+  claude:
+    image: ghcr.io/colossaltuna/claudex-claude:latest
+    tty: true
+    stdin_open: true
+    environment:
+      CLAUDEX_WORKDIR: /workspace
+      # Give each agent its own git worktree so they cannot clobber each other
+      # while still sharing one object store for review.
+      CLAUDEX_WORKTREE: "1"
+    volumes:
+      - ${CLAUDEX_WORKSPACE:-./workspace}:/workspace
+      - claude-home:/home/dev
+      # Credentials are seeded from here into /home/dev on first start.
+      # See CREDENTIALS.md. Create the directory before starting, or drop this
+      # mount and run `claude` interactively once to log in.
+      - ${CLAUDEX_SECRETS:-./secrets}:/run/secrets/claudex:ro
+
+  codex:
+    image: ghcr.io/colossaltuna/claudex-codex:latest
+    environment:
+      CLAUDEX_WORKDIR: /workspace
+      CLAUDEX_WORKTREE: "1"
+      # Uncomment to expose the app-server beyond loopback, which is what lets
+      # the claude container drive it. Always pair it with a token file.
+      # CLAUDEX_CODEX_LISTEN: ws://0.0.0.0:9742
+      # CLAUDEX_CODEX_TOKEN_FILE: /run/secrets/claudex/codex-ws-token
+    volumes:
+      - ${CLAUDEX_WORKSPACE:-./workspace}:/workspace
+      - codex-home:/home/dev
+      - ${CLAUDEX_SECRETS:-./secrets}:/run/secrets/claudex:ro
+
+volumes:
+  claude-home:
+  codex-home:

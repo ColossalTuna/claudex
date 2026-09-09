@@ -1,0 +1,146 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Containerfile
+          config: .hadolint.yaml
+
+      - name: shellcheck
+        run: |
+          sudo apt-get update && sudo apt-get install -y shellcheck
+          shellcheck scripts/claudex-entrypoint scripts/claudex-claude scripts/claudex-codex \
+                     scripts/claudex-upgrade scripts/claudex-smoke scripts/claudex-lib.sh scripts/profile.sh
+
+      - name: helm lint and render
+        run: |
+          helm lint deploy/helm/claudex
+          helm template claudex deploy/helm/claudex > /dev/null
+          # Rendering with every optional feature on catches template errors that
+          # the default values would hide.
+          helm template claudex deploy/helm/claudex \
+            --set workspace.type=pvc \
+            --set credentials.secretName=claudex-credentials \
+            --set codex.listen=ws://0.0.0.0:9742 \
+            --set codex.wsTokenSecret=claudex-ws \
+            > /dev/null
+
+  build:
+    # Builds every image and proves it actually works. Nothing is pushed here;
+    # publishing happens only on a v* tag, in release.yml.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build base (amd64, loaded)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          target: base
+          platforms: linux/amd64
+          load: true
+          tags: claudex-base:ci
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=base
+
+      - name: Build claude (amd64, loaded)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          target: claude
+          platforms: linux/amd64
+          load: true
+          tags: claudex-claude:ci
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=claude
+
+      - name: Build codex (amd64, loaded)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Containerfile
+          target: codex
+          platforms: linux/amd64
+          load: true
+          tags: claudex-codex:ci
+          cache-from: type=gha,scope=base
+          cache-to: type=gha,mode=max,scope=codex
+
+      - name: Smoke test base
+        run: docker run --rm claudex-base:ci claudex-smoke
+
+      - name: Smoke test claude
+        run: docker run --rm claudex-claude:ci claudex-smoke
+
+      - name: Smoke test codex
+        run: docker run --rm claudex-codex:ci claudex-smoke
+
+      - name: Smoke test under an arbitrary UID
+        # Proves the image survives `runAsUser: <anything>` on a restricted cluster.
+        run: docker run --rm --user 1000670000:0 claudex-base:ci claudex-smoke
+
+      - name: Report image sizes and resolved versions
+        run: |
+          {
+            echo "### Image sizes"
+            echo
+            docker images --format '| `{{.Repository}}:{{.Tag}}` | {{.Size}} |' | grep claudex- \
+              | sed '1i | image | size |\n| --- | --- |'
+            echo
+            echo "### Resolved versions"
+            echo
+            echo '```'
+            docker run --rm claudex-claude:ci bash -lc 'node --version; python3 --version; uv --version; claude --version'
+            docker run --rm claudex-codex:ci bash -lc 'codex --version'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-arm64:
+    # arm64 is built but not smoke tested: running it here would need QEMU
+    # emulation, which turns a two minute job into a very long one. The release
+    # workflow publishes both architectures from the same Containerfile.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build all targets for arm64
+        run: |
+          for target in base claude codex; do
+            docker buildx build \
+              --file Containerfile \
+              --target "$target" \
+              --platform linux/arm64 \
+              --cache-from "type=gha,scope=arm64-$target" \
+              --cache-to "type=gha,mode=max,scope=arm64-$target" \
+              .
+          done

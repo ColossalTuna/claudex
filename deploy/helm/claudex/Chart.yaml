@@ -1,0 +1,16 @@
+apiVersion: v2
+name: claudex
+description: Claude Code and Codex agents co-located in one pod against a shared workspace
+type: application
+
+# Chart version tracks the chart; appVersion tracks the claudex image release.
+version: 0.1.0
+appVersion: "0.1.0"
+
+keywords:
+  - claude-code
+  - codex
+  - development-environment
+home: https://github.com/ColossalTuna/claudex
+sources:
+  - https://github.com/ColossalTuna/claudex
