@@ -66,6 +66,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 # Each tarball is verified against the checksum file published alongside it.
 # This catches truncated and tampered downloads; it is not a substitute for
 # upstream release signing, which these projects do not uniformly provide.
+#
+# The three upstreams do not agree on a format: Node and mise publish one
+# SHASUMS256.txt covering every asset while uv publishes a per-asset .sha256,
+# and mise prefixes its filenames with "./" where Node does not. Hence the
+# grep that accepts either a space or a slash before the filename.
 WORKDIR /tmp/dl
 
 RUN set -euo pipefail; \
@@ -91,11 +96,10 @@ RUN set -euo pipefail; \
     mise_tar="mise-v${MISE_VERSION}-${mise_arch}.tar.gz"; \
     curl -fsSLO "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/${mise_tar}"; \
     curl -fsSL "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/SHASUMS256.txt" \
-      | grep " ${mise_tar}\$" | sha256sum -c -; \
+      | grep -E "( |/)${mise_tar}\$" | sha256sum -c -; \
     tar -xzf "${mise_tar}" -C /tmp/dl; \
     install -m 0755 "$(find /tmp/dl/mise -type f -name mise -perm -u+x | head -n1)" /out/opt/mise/bin/mise; \
     \
-    rm -rf /tmp/dl; \
     /out/opt/node/bin/node --version; \
     /out/opt/uv/bin/uv --version; \
     /out/opt/mise/bin/mise --version
