@@ -104,6 +104,9 @@ jobs:
         run: docker run --rm --user 1000670000:0 claudex-base:ci claudex-smoke
 
       - name: Report image sizes and resolved versions
+        # tee rather than plain redirect: the step summary is not reachable
+        # through the API, so the same report has to land in the job log to be
+        # readable after the fact.
         run: |
           {
             echo "### Image sizes"
@@ -117,7 +120,7 @@ jobs:
             docker run --rm claudex-claude:ci bash -lc 'node --version; python3 --version; uv --version; claude --version'
             docker run --rm claudex-codex:ci bash -lc 'codex --version'
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   build-arm64:
     # arm64 is built but not smoke tested: running it here would need QEMU
