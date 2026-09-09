@@ -35,6 +35,10 @@ ARG UV_VERSION=0.12.11
 ARG MISE_VERSION=2026.9.3
 # renovate: datasource=npm depName=playwright
 ARG PLAYWRIGHT_VERSION=1.63.0
+# gh comes from upstream releases rather than apt: Debian trixie ships 2.46.0
+# (January 2025), which is far behind for a tool used this heavily.
+# renovate: datasource=github-releases depName=cli/cli extractVersion=^v(?<version>.*)$
+ARG GH_VERSION=2.100.0
 
 # Deliberately unpinned. Override for a reproducible build:
 #   --build-arg CLAUDE_CODE_VERSION=2.1.266 --build-arg CODEX_VERSION=0.153.4
@@ -51,6 +55,7 @@ FROM debian@${DEBIAN_DIGEST} AS fetcher
 ARG NODE_VERSION
 ARG UV_VERSION
 ARG MISE_VERSION
+ARG GH_VERSION
 ARG TARGETARCH
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -79,7 +84,7 @@ RUN set -euo pipefail; \
       arm64) node_arch=arm64; uv_arch=aarch64-unknown-linux-gnu; mise_arch=linux-arm64 ;; \
       *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
-    mkdir -p /out/opt/node /out/opt/uv/bin /out/opt/mise/bin; \
+    mkdir -p /out/opt/node /out/opt/uv/bin /out/opt/mise/bin /out/opt/gh/bin; \
     \
     node_tar="node-v${NODE_VERSION}-linux-${node_arch}.tar.xz"; \
     curl -fsSLO "https://nodejs.org/dist/v${NODE_VERSION}/${node_tar}"; \
@@ -100,9 +105,17 @@ RUN set -euo pipefail; \
     tar -xzf "${mise_tar}" -C /tmp/dl; \
     install -m 0755 "$(find /tmp/dl/mise -type f -name mise -perm -u+x | head -n1)" /out/opt/mise/bin/mise; \
     \
+    gh_tar="gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    curl -fsSLO "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${gh_tar}"; \
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_checksums.txt" \
+      | grep -E "( |/)${gh_tar}\$" | sha256sum -c -; \
+    tar -xzf "${gh_tar}" -C /tmp/dl; \
+    install -m 0755 "/tmp/dl/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /out/opt/gh/bin/gh; \
+    \
     /out/opt/node/bin/node --version; \
     /out/opt/uv/bin/uv --version; \
-    /out/opt/mise/bin/mise --version
+    /out/opt/mise/bin/mise --version; \
+    /out/opt/gh/bin/gh --version
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +161,6 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       ca-certificates \
       curl \
       fd-find \
-      gh \
       git \
       git-delta \
       gnupg \
@@ -175,6 +187,10 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 COPY --from=fetcher /out/opt/node /opt/node
 COPY --from=fetcher /out/opt/uv /opt/uv
 COPY --from=fetcher /out/opt/mise /opt/mise
+# Only the binary: the release tarball's man pages and licence would add weight
+# for something nobody reads inside a container. `gh completion -s bash`
+# regenerates shell completion on demand.
+COPY --from=fetcher /out/opt/gh/bin/gh /usr/local/bin/gh
 
 # The runtime user. UID/GID 1000 matches the usual Linux host user so bind
 # mounts line up. Group 0 ownership plus setgid dirs let the image also run

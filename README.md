@@ -24,6 +24,7 @@ the shared base exactly once.
 - **Runtimes**: Node.js 22 LTS, Python 3 with `uv`, and `mise` for anything else.
 - **Browser**: Playwright with Chromium preinstalled to `/opt/pw-browsers`, shared and read-only to every user, with `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` so a project's own `npm install` will not fetch a second copy.
 - **Development tools**: git, gh, ripgrep, fd, jq, delta, tmux, vim, nano, htop, tree, less, openssh-client, and a C/C++ build toolchain for native modules and wheels.
+- **`gh` comes from upstream releases**, pinned by `GH_VERSION`, not from apt: Debian trixie ships 2.46.0 from January 2025, which is far behind. Everything else apt provides is current enough within the pinned base digest.
 - **User**: `dev`, UID/GID 1000, no sudo.
 
 ## Quick start
