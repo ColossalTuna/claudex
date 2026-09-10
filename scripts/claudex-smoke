@@ -42,6 +42,11 @@ if [[ -w /etc/passwd ]]; then
 else
   bad "/etc/passwd is not group-writable; an arbitrary runtime UID will have no passwd entry"
 fi
+if [[ -w /etc/group ]]; then
+  bad "/etc/group is writable; only /etc/passwd needs to be, for the entrypoint's UID repair"
+else
+  ok "/etc/group is not writable (nothing in this image writes it)"
+fi
 check "uid $uid resolves to a passwd entry" getent passwd "$uid"
 
 group "writable paths"

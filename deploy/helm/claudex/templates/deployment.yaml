@@ -1,6 +1,12 @@
 {{- if not (or .Values.claude.enabled .Values.codex.enabled) }}
 {{- fail "at least one of claude.enabled or codex.enabled must be true" }}
 {{- end }}
+{{- if and .Values.codex.enabled .Values.codex.listen (not .Values.codex.wsTokenSecret) }}
+{{- $listen := .Values.codex.listen }}
+{{- if not (or (contains "127.0.0.1" $listen) (contains "localhost" $listen) (contains "[::1]" $listen)) }}
+{{- fail "codex.listen binds the app-server beyond loopback without codex.wsTokenSecret. Anything that can reach that port can drive the agent with full workspace access. Set codex.wsTokenSecret, or bind to 127.0.0.1 (pod containers share a network namespace, so the claude container reaches it there)." }}
+{{- end }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -130,6 +136,12 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "claudex.fullname" . }}-workspace
           {{- end }}
+        {{- /*
+          Declared only for an enabled agent. templates/pvc.yaml creates a home
+          PVC per enabled agent, so declaring both here would make the pod
+          reference a claim that was never created and leave it Pending.
+        */}}
+        {{- if .Values.claude.enabled }}
         - name: claude-home
           {{- if .Values.home.persist }}
           persistentVolumeClaim:
@@ -137,6 +149,8 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
+        {{- if .Values.codex.enabled }}
         - name: codex-home
           {{- if .Values.home.persist }}
           persistentVolumeClaim:
@@ -144,6 +158,7 @@ spec:
           {{- else }}
           emptyDir: {}
           {{- end }}
+        {{- end }}
         {{- if .Values.credentials.secretName }}
         - name: credentials
           secret:

@@ -56,8 +56,10 @@ workspace:
   size: 20Gi
   storageClass: ""
   existingClaim: ""
-  # One git worktree per agent inside the shared repository, so the two agents
-  # cannot overwrite each other's files while still sharing an object store.
+  # One git worktree per agent inside the shared repository: separate branches
+  # and a clean tree each, while still sharing an object store so they can
+  # review each other's work. This separates branch state, not access — both
+  # containers run as the same UID on this volume.
   worktree: true
 
 home:

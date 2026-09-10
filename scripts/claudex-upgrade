@@ -8,6 +8,19 @@
 # version, which is the intended behaviour.
 #
 # Usage: claudex-upgrade [claude|codex|all]   (default: whichever agent is installed)
+#
+# Environment:
+#   CLAUDEX_CLAUDE_VERSION  npm spec to install (default: latest)
+#   CLAUDEX_CODEX_VERSION   npm spec to install (default: latest)
+#
+# These are deliberately NOT the build arguments CLAUDE_CODE_VERSION and
+# CODEX_VERSION, and the build arguments are deliberately not exported into the
+# image. They answer different questions: the build argument is what this image
+# shipped with, while these are what to move to. Reusing one name for both would
+# make `claudex-upgrade` a no-op on any image built with a pinned agent, which
+# is precisely the image whose operator is most likely to want a newer agent
+# without waiting for a rebuild. What shipped is recorded separately, in
+# /opt/npm-global/.claudex-agent-version.
 set -euo pipefail
 
 log() { printf 'claudex: %s\n' "$*" >&2; }
@@ -21,13 +34,13 @@ fi
 
 upgrade_claude() {
   log "upgrading @anthropic-ai/claude-code"
-  npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION:-latest}"
+  npm install -g "@anthropic-ai/claude-code@${CLAUDEX_CLAUDE_VERSION:-latest}"
   claude --version
 }
 
 upgrade_codex() {
   log "upgrading @openai/codex"
-  npm install -g "@openai/codex@${CODEX_VERSION:-latest}"
+  npm install -g "@openai/codex@${CLAUDEX_CODEX_VERSION:-latest}"
   codex --version
 }
 

@@ -50,7 +50,14 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+          # latest=auto is the action's default, stated here because it is
+          # load-bearing: it emits `latest` only for a stable semver tag, so a
+          # prerelease like v1.4.0-rc.1 cannot overwrite the stable image. A
+          # `type=raw,value=latest` line would fire unconditionally and defeat
+          # this. A tag that is not semver at all produces no tags and fails the
+          # build below, which is the intended fail-loud behaviour.
+          flavor: |
+            latest=auto
 
       - name: Build and push
         id: push

@@ -47,9 +47,9 @@ elif [[ -n "${CLAUDEX_CODEX_LISTEN:-}" && "${CLAUDEX_CODEX_LISTEN}" != *127.0.0.
 fi
 
 if [[ -n "${CLAUDEX_CODEX_ARGS:-}" ]]; then
-  # Intentional word splitting: this variable is an argument list.
-  # shellcheck disable=SC2206
-  extra=(${CLAUDEX_CODEX_ARGS})
+  # Split on whitespace but do NOT glob: an unquoted expansion would also run
+  # pathname expansion, so `--cd *` would become the workspace listing.
+  read -ra extra <<< "$CLAUDEX_CODEX_ARGS"
   args+=("${extra[@]}")
 fi
 

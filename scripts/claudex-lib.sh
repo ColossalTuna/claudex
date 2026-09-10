@@ -14,8 +14,10 @@ claudex_resolve_workdir() {
   printf '%s' "$dir"
 }
 
-# Optional per-agent git worktree so two agents can work in one repository
-# without touching each other's files, while still sharing one object store.
+# Optional per-agent git worktree so two agents can work in one repository on
+# separate branches, each with its own clean tree, while still sharing one
+# object store. This separates their *branch state*; it is not an access
+# boundary, since both agents run as the same UID on the same volume.
 # Off by default. Set CLAUDEX_WORKTREE=1 to enable.
 #
 # Prints the directory the agent should run in.
@@ -33,17 +35,30 @@ claudex_prepare_worktree() {
     return 0
   fi
 
-  local worktree="${CLAUDEX_WORKTREE_ROOT:-$repo/.worktrees}/$agent"
+  local root="${CLAUDEX_WORKTREE_ROOT:-$repo/.worktrees}"
+  root="${root%/}"
+  local worktree="$root/$agent"
   local branch="${CLAUDEX_WORKTREE_BRANCH:-agent/$agent}"
 
-  # Keep the worktree root out of `git status` without editing a tracked
+  # Keep the worktree root out of `git status`, without editing a tracked
   # .gitignore that belongs to the user's repository.
-  local exclude
-  exclude="$(git -C "$repo" rev-parse --git-common-dir)/info/exclude"
-  if [[ -f "$exclude" ]] && ! grep -qxF '/.worktrees/' "$exclude" 2>/dev/null; then
-    printf '/.worktrees/\n' >> "$exclude" 2>/dev/null \
-      || claudex_log "warning: could not append to $exclude"
-  fi
+  #
+  # The pattern is derived from the resolved root rather than hardcoded:
+  # CLAUDEX_WORKTREE_ROOT can put the worktrees anywhere, and a fixed
+  # '/.worktrees/' would silently miss a custom location and leave it showing up
+  # as untracked. A root outside the repository needs no exclude at all.
+  local toplevel rel exclude
+  toplevel="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || printf '%s' "$repo")"
+  case "$root" in
+    "$toplevel"/*)
+      rel="/${root#"$toplevel"/}/"
+      exclude="$(git -C "$repo" rev-parse --git-common-dir)/info/exclude"
+      if [[ -f "$exclude" ]] && ! grep -qxF "$rel" "$exclude" 2>/dev/null; then
+        printf '%s\n' "$rel" >> "$exclude" 2>/dev/null \
+          || claudex_log "warning: could not append to $exclude"
+      fi
+      ;;
+  esac
 
   if git -C "$repo" worktree list --porcelain 2>/dev/null | grep -qxF "worktree $worktree"; then
     claudex_log "reusing existing worktree $worktree"

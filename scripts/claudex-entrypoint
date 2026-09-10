@@ -48,7 +48,14 @@ seed_credential() {
     log "$(basename "$dst") already present; leaving it alone"
     return 0
   fi
-  install -m 0600 "$src" "$dst" && log "seeded $(basename "$dst") from $src"
+  # Never fatal. This entrypoint runs before *every* command in the container,
+  # `bash` included, so exiting here would leave an operator unable to exec in
+  # and diagnose why the copy failed (read-only HOME, fsGroup mismatch).
+  if install -m 0600 "$src" "$dst"; then
+    log "seeded $(basename "$dst") from $src"
+  else
+    log "warning: could not seed $(basename "$dst") from $src"
+  fi
 }
 
 if [[ -d "$secrets_dir" ]]; then

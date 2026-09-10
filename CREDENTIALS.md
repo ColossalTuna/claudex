@@ -148,7 +148,11 @@ Consequences worth planning for:
 
 - `.credentials.json` and `auth.json` are bearer credentials for your account.
   Treat them like passwords.
-- They are mounted with mode `0400` and copied with mode `0600`.
+- The copy the entrypoint writes is always mode `0600`. The *source* mount's
+  mode depends on the deployment: the Helm chart sets `defaultMode: 0400` on the
+  Secret volume, but a Compose bind mount just exposes the host file's own
+  permissions — `:ro` stops the container writing it, it does not restrict who
+  can read it. Set the host file to `0600` yourself before mounting it.
 - Nothing in this repository writes a credential into an image layer, a log, or
   a build argument. Keep it that way: build arguments are visible in image
   history.

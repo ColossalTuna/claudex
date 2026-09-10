@@ -42,6 +42,12 @@ ARG GH_VERSION=2.100.0
 
 # Deliberately unpinned. Override for a reproducible build:
 #   --build-arg CLAUDE_CODE_VERSION=2.1.266 --build-arg CODEX_VERSION=0.153.4
+#
+# These stay build-only and are never promoted to ENV. A running container that
+# wants a different agent uses CLAUDEX_CLAUDE_VERSION / CLAUDEX_CODEX_VERSION
+# with claudex-upgrade; baking the build pin into the environment would make
+# that command a no-op on exactly the images that pinned. What shipped is
+# recorded at /opt/npm-global/.claudex-agent-version.
 ARG CLAUDE_CODE_VERSION=latest
 ARG CODEX_VERSION=latest
 
@@ -195,14 +201,19 @@ COPY --from=fetcher /out/opt/gh/bin/gh /usr/local/bin/gh
 # The runtime user. UID/GID 1000 matches the usual Linux host user so bind
 # mounts line up. Group 0 ownership plus setgid dirs let the image also run
 # under an arbitrary UID (OpenShift-style runAsUser) without losing write access.
+#
+# Only /etc/passwd is made group-writable, not /etc/group: the entrypoint adds a
+# passwd line for an unknown UID, and that line's GID is 0, a group that already
+# exists. Nothing in this image writes /etc/group, so it stays read-only to the
+# runtime user. claudex-smoke asserts both halves of this.
 RUN groupadd --gid 1000 dev \
  && useradd --uid 1000 --gid 1000 --shell /bin/bash --create-home dev \
  && mkdir -p /workspace /opt/npm-global /opt/pw-browsers /home/dev/.claude /home/dev/.codex /home/dev/.local/bin \
  && chown -R 1000:0 /workspace /opt/npm-global /opt/pw-browsers /home/dev \
  && chmod -R g=u /workspace /opt/npm-global /opt/pw-browsers /home/dev \
  && chmod g+s /workspace /opt/npm-global /opt/pw-browsers /home/dev \
- && chgrp 0 /etc/passwd /etc/group \
- && chmod g+w /etc/passwd /etc/group
+ && chgrp 0 /etc/passwd \
+ && chmod g+w /etc/passwd
 
 # Playwright's system dependencies need root; the browser itself is installed as
 # dev into the shared PLAYWRIGHT_BROWSERS_PATH so every user can read it.

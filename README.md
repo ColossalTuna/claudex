@@ -55,6 +55,7 @@ devcontainer, a compose file, and a pod spec.
 | --- | --- | --- |
 | `CLAUDEX_WORKDIR` | `/workspace` | directory the agent runs in |
 | `CLAUDEX_WORKTREE` | `0` | `1` gives the agent its own git worktree under `.worktrees/<agent>` |
+| `CLAUDEX_WORKTREE_ROOT` | `<workdir>/.worktrees` | where the per-agent worktrees are created |
 | `CLAUDEX_WORKTREE_BRANCH` | `agent/<agent>` | branch for that worktree |
 | `CLAUDEX_PTY` | `0` | `1` synthesizes a PTY with `script(1)` instead of requiring one |
 | `CLAUDEX_SKIP_PERMISSIONS` | `0` | `1` passes `--dangerously-skip-permissions` to Claude Code |
@@ -63,6 +64,8 @@ devcontainer, a compose file, and a pod spec.
 | `CLAUDEX_CODEX_LISTEN` | unset | Codex app-server listen address; unset means loopback only |
 | `CLAUDEX_CODEX_TOKEN_FILE` | unset | token file for Codex WebSocket authentication |
 | `CLAUDEX_MISE_ACTIVATE` | unset | activate `mise` in interactive login shells |
+| `CLAUDEX_CLAUDE_VERSION` | `latest` | npm spec `claudex-upgrade` installs for Claude Code |
+| `CLAUDEX_CODEX_VERSION` | `latest` | npm spec `claudex-upgrade` installs for Codex |
 | `CLAUDE_CONFIG_DIR` | `/home/dev/.claude` | Claude Code config and credentials |
 | `CODEX_HOME` | `/home/dev/.codex` | Codex config and credentials |
 
@@ -82,7 +85,15 @@ needs a shared filesystem, which both supported topologies provide:
 
 Set `CLAUDEX_WORKTREE=1` on both so each works in its own git worktree. They
 share one object store, so `git diff agent/claude agent/codex` works with no
-remote involved, and neither can overwrite the other's files.
+remote involved, and each agent gets a clean tree on its own branch instead of
+fighting the other over one checked-out `HEAD`.
+
+That is a coordination convenience, **not an isolation boundary**. Both
+containers run as the same UID on the same volume, so either agent can read or
+write the other's worktree if it goes looking. If you need one agent to be
+unable to touch the other's files, that takes separate identities and separate
+mounts, which this chart does not do — and which would cost you the shared
+object store that makes cross-review work in the first place.
 
 ```bash
 helm install claudex deploy/helm/claudex \
@@ -119,6 +130,14 @@ without root and without a rebuild:
 claudex-upgrade          # whichever agent is installed
 claudex-upgrade all
 ```
+
+It installs `latest` by default. Set `CLAUDEX_CLAUDE_VERSION` or
+`CLAUDEX_CODEX_VERSION` to pick a specific npm spec instead. Those are distinct
+from the `CLAUDE_CODE_VERSION` / `CODEX_VERSION` build arguments on purpose: the
+build argument records what the image shipped with, and is not exported into the
+runtime environment, so pinning an agent at build time never turns
+`claudex-upgrade` into a no-op. What shipped is readable at
+`/opt/npm-global/.claudex-agent-version`.
 
 The upgrade lives in the container's writable layer and is gone after a
 restart, which is intended: the image is the source of truth.

@@ -18,8 +18,9 @@ services:
     stdin_open: true
     environment:
       CLAUDEX_WORKDIR: /workspace
-      # Give each agent its own git worktree so they cannot clobber each other
-      # while still sharing one object store for review.
+      # Give each agent its own branch and clean tree, while still sharing one
+      # object store for review. Not an access boundary: both containers run as
+      # the same UID on the same volume.
       CLAUDEX_WORKTREE: "1"
     volumes:
       - ${CLAUDEX_WORKSPACE:-./workspace}:/workspace

@@ -42,9 +42,9 @@ case "${CLAUDEX_SKIP_PERMISSIONS:-0}" in
 esac
 
 if [[ -n "${CLAUDEX_CLAUDE_ARGS:-}" ]]; then
-  # Intentional word splitting: this variable is an argument list.
-  # shellcheck disable=SC2206
-  extra=(${CLAUDEX_CLAUDE_ARGS})
+  # Split on whitespace but do NOT glob: an unquoted expansion would also run
+  # pathname expansion, so `--add-dir *` would become the workspace listing.
+  read -ra extra <<< "$CLAUDEX_CLAUDE_ARGS"
   args+=("${extra[@]}")
 fi
 
