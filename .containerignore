@@ -1,0 +1,6 @@
+# Only scripts/ is copied into the image; everything else is build noise.
+# Keeping the context small speeds up every build and avoids accidental
+# inclusion of credentials that happen to be lying around.
+*
+!scripts/
+!scripts/**

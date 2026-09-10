@@ -1,0 +1,110 @@
+# claudex Helm values.
+#
+# The two agents run as two containers in ONE pod. That is deliberate: pod
+# containers share a network namespace and can share a volume, so the agents can
+# review each other's work through git and reach each other on 127.0.0.1
+# without any ReadWriteMany storage class.
+
+image:
+  registry: ghcr.io
+  namespace: colossaltuna
+  # Overrides the chart's appVersion when set.
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+claude:
+  enabled: true
+  # Claude Code's Remote Control server renders a terminal UI and needs a PTY.
+  # Setting these is the documented contract; the alternative is env.CLAUDEX_PTY=1.
+  tty: true
+  stdin: true
+  args: []
+  env: {}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 6Gi
+
+codex:
+  enabled: true
+  # Codex's remote-control app-server is headless, so no TTY is needed.
+  tty: false
+  stdin: false
+  args: []
+  env: {}
+  # Loopback by default. Set to ws://0.0.0.0:9742 to let other containers or a
+  # Service reach it, and always pair that with wsTokenSecret.
+  listen: ""
+  # Name of a Secret with a `token` key used for WebSocket authentication.
+  wsTokenSecret: ""
+  resources:
+    requests:
+      cpu: 500m
+      memory: 2Gi
+    limits:
+      memory: 6Gi
+
+workspace:
+  # The shared checkout both agents work in.
+  #   emptyDir  scratch, gone when the pod dies
+  #   pvc       persistent, survives restarts
+  #   existing  an already-created PVC, named below
+  type: emptyDir
+  size: 20Gi
+  storageClass: ""
+  existingClaim: ""
+  # One git worktree per agent inside the shared repository: separate branches
+  # and a clean tree each, while still sharing an object store so they can
+  # review each other's work. This separates branch state, not access — both
+  # containers run as the same UID on this volume.
+  worktree: true
+
+home:
+  # Each agent gets its own HOME. This is where the refreshed credential is
+  # written, so a PVC is what lets an unattended pod renew its own login.
+  persist: true
+  size: 5Gi
+  storageClass: ""
+
+credentials:
+  # Secret holding the harvested agent credentials. Expected keys:
+  #   claude-credentials.json   from ~/.claude/.credentials.json
+  #   codex-auth.json           from ~/.codex/auth.json
+  # Mounted read-only; the entrypoint copies them into the writable HOME so the
+  # agents can refresh their tokens. See CREDENTIALS.md.
+  secretName: ""
+
+# Extra environment for both containers. Do NOT set DISABLE_TELEMETRY,
+# DO_NOT_TRACK, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, DISABLE_GROWTHBOOK or
+# a custom ANTHROPIC_BASE_URL here: each one disables Claude Code Remote Control.
+env: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 0
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  # readOnlyRootFilesystem is intentionally false: both agents self-update and
+  # write to their own install and config directories.
+  readOnlyRootFilesystem: false
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}

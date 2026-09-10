@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+#
+# claudex entrypoint. Runs before every command in the container, including
+# `bash`, the launchers, and anything a pod spec supplies as its command.
+#
+# It does three things and then gets out of the way:
+#   1. makes an arbitrary runtime UID usable (Kubernetes runAsUser)
+#   2. seeds credentials from a read-only secret mount into a writable config dir
+#   3. pre-accepts workspace trust for the working directory
+set -euo pipefail
+
+log() { printf 'claudex: %s\n' "$*" >&2; }
+
+# --- 1. arbitrary UID -------------------------------------------------------
+# Under `runAsUser: <arbitrary>` the UID has no /etc/passwd entry, which breaks
+# whoami, git's author detection, and anything that expands ~. /etc/passwd is
+# group-0 writable in this image precisely so this repair is possible.
+uid="$(id -u)"
+if ! getent passwd "$uid" >/dev/null 2>&1; then
+  if [[ -w /etc/passwd ]]; then
+    printf 'dev:x:%s:0:claudex runtime user:%s:/bin/bash\n' "$uid" "${HOME:-/home/dev}" >> /etc/passwd
+    log "added a passwd entry for uid $uid"
+  else
+    log "warning: uid $uid has no passwd entry and /etc/passwd is not writable"
+  fi
+fi
+
+export HOME="${HOME:-/home/dev}"
+export CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+
+for d in "$CLAUDE_CONFIG_DIR" "$CODEX_HOME"; do
+  mkdir -p "$d" 2>/dev/null || log "warning: could not create $d"
+done
+
+# --- 2. credential seeding --------------------------------------------------
+# A Kubernetes Secret mounts read-only, but both agents refresh their tokens by
+# writing the credential file back. Copying out of the secret mount into a
+# writable directory is what makes an unattended pod able to renew itself.
+#
+# Seeding is one-way and one-time: an existing credential is never overwritten,
+# so a refreshed token on a persistent volume always wins over the original.
+secrets_dir="${CLAUDEX_SECRETS_DIR:-/run/secrets/claudex}"
+seed_credential() {
+  local src="$1" dst="$2"
+  [[ -r "$src" ]] || return 0
+  if [[ -e "$dst" ]]; then
+    log "$(basename "$dst") already present; leaving it alone"
+    return 0
+  fi
+  # Never fatal. This entrypoint runs before *every* command in the container,
+  # `bash` included, so exiting here would leave an operator unable to exec in
+  # and diagnose why the copy failed (read-only HOME, fsGroup mismatch).
+  if install -m 0600 "$src" "$dst"; then
+    log "seeded $(basename "$dst") from $src"
+  else
+    log "warning: could not seed $(basename "$dst") from $src"
+  fi
+}
+
+if [[ -d "$secrets_dir" ]]; then
+  seed_credential "$secrets_dir/claude-credentials.json" "$CLAUDE_CONFIG_DIR/.credentials.json"
+  seed_credential "$secrets_dir/codex-auth.json" "$CODEX_HOME/auth.json"
+fi
+
+# --- 3. workspace trust -----------------------------------------------------
+# Claude Code blocks on a trust dialog the first time it runs in a directory,
+# and never inherits trust from HOME. Mounting a directory into this container
+# is itself the operator's statement that it is trusted, so pre-accept it.
+#
+# NOTE: the on-disk shape of this flag is inferred from Claude Code's config
+# file rather than from documented API, and is not verified by the smoke test.
+# Set CLAUDEX_SEED_TRUST=0 to skip it if a future version changes the schema.
+workdir="${CLAUDEX_WORKDIR:-/workspace}"
+if [[ "${CLAUDEX_SEED_TRUST:-1}" != "0" && -d "$workdir" ]]; then
+  config="$CLAUDE_CONFIG_DIR/.claude.json"
+  if command -v jq >/dev/null 2>&1 && [[ -w "$CLAUDE_CONFIG_DIR" ]]; then
+    tmp="$(mktemp "${TMPDIR:-/tmp}/claudex-config.XXXXXX")"
+    if [[ -s "$config" ]]; then cp "$config" "$tmp"; else printf '{}\n' > "$tmp"; fi
+    if jq --arg dir "$workdir" \
+         '.projects[$dir].hasTrustDialogAccepted = true' \
+         "$tmp" > "$tmp.new" 2>/dev/null; then
+      mv "$tmp.new" "$config"
+      chmod 0600 "$config" 2>/dev/null || true
+    else
+      log "warning: could not pre-accept workspace trust for $workdir"
+    fi
+    rm -f "$tmp" "$tmp.new"
+  fi
+fi
+
+exec "$@"

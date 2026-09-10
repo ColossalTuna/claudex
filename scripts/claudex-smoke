@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+#
+# In-container smoke test. Proves the image is actually usable rather than
+# merely built. Run with `make test`, in CI, or by hand inside a container.
+#
+# Exit code is the number of failed checks, capped at 125.
+set -uo pipefail
+
+pass=0
+fail=0
+
+ok()   { printf '  \033[32mok\033[0m   %s\n' "$*"; pass=$((pass + 1)); }
+bad()  { printf '  \033[31mFAIL\033[0m %s\n' "$*"; fail=$((fail + 1)); }
+note() { printf '       %s\n' "$*"; }
+group(){ printf '\n%s\n' "$*"; }
+
+check() { # check <description> <command...>
+  local desc="$1"; shift
+  if "$@" >/dev/null 2>&1; then ok "$desc"; else bad "$desc"; fi
+}
+
+version_of() { # version_of <label> <command...>
+  local label="$1"; shift
+  local out
+  if out="$("$@" 2>&1 | head -n1)"; then
+    ok "$label: $out"
+  else
+    bad "$label: $* failed"
+  fi
+}
+
+group "identity"
+uid="$(id -u)"
+if [[ "$uid" -ne 0 ]]; then ok "running as non-root (uid $uid)"; else bad "running as root"; fi
+if command -v sudo >/dev/null 2>&1; then
+  bad "sudo is present; this image is meant to have none"
+else
+  ok "no sudo binary"
+fi
+if [[ -w /etc/passwd ]]; then
+  ok "/etc/passwd is writable by the runtime group (arbitrary UID support)"
+else
+  bad "/etc/passwd is not group-writable; an arbitrary runtime UID will have no passwd entry"
+fi
+if [[ -w /etc/group ]]; then
+  bad "/etc/group is writable; only /etc/passwd needs to be, for the entrypoint's UID repair"
+else
+  ok "/etc/group is not writable (nothing in this image writes it)"
+fi
+check "uid $uid resolves to a passwd entry" getent passwd "$uid"
+
+group "writable paths"
+for d in "${HOME:-/home/dev}" /opt/npm-global "${CLAUDEX_WORKDIR:-/workspace}"; do
+  if [[ -w "$d" ]]; then ok "$d is writable"; else bad "$d is not writable"; fi
+done
+for d in "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" "${CODEX_HOME:-$HOME/.codex}"; do
+  if [[ -d "$d" && -w "$d" ]]; then ok "$d exists and is writable"; else bad "$d missing or read-only"; fi
+done
+
+group "toolchain"
+version_of "node"     node --version
+version_of "npm"      npm --version
+version_of "python3"  python3 --version
+version_of "uv"       uv --version
+version_of "mise"     mise --version
+version_of "git"      git --version
+version_of "gh"       gh --version
+version_of "rg"       rg --version
+version_of "fd"       fd --version
+version_of "jq"       jq --version
+version_of "delta"    delta --version
+version_of "tmux"     tmux -V
+check "cc is present (build toolchain)" command -v cc
+check "make is present"                 command -v make
+
+group "PATH wiring"
+for mode in "bash -lc" "bash -c" "bash -ic"; do
+  # A login shell, a non-login shell, and an interactive shell must all agree,
+  # because docker exec, a pod command, and a human shell each use a different one.
+  if $mode 'command -v node >/dev/null && command -v npm >/dev/null' </dev/null >/dev/null 2>&1; then
+    ok "node and npm on PATH via: $mode"
+  else
+    bad "node or npm missing on PATH via: $mode"
+  fi
+done
+
+group "playwright"
+if [[ -n "${PLAYWRIGHT_BROWSERS_PATH:-}" ]]; then
+  ok "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH"
+else
+  bad "PLAYWRIGHT_BROWSERS_PATH is not set"
+fi
+if [[ "${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-}" == "1" ]]; then
+  ok "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 (project installs will not re-download)"
+else
+  bad "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD is not 1"
+fi
+version_of "playwright" playwright --version
+
+launch_js='
+const { chromium } = require("playwright");
+(async () => {
+  const browser = await chromium.launch({ args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  const page = await browser.newPage();
+  await page.setContent("<h1 id=t>claudex</h1>");
+  const text = await page.textContent("#t");
+  await browser.close();
+  if (text !== "claudex") { console.error("unexpected content: " + text); process.exit(1); }
+})().catch((e) => { console.error(e); process.exit(1); });
+'
+if out="$(node -e "$launch_js" 2>&1)"; then
+  ok "chromium launches and renders a page"
+else
+  bad "chromium failed to launch"
+  note "$(printf '%s' "$out" | head -n5)"
+fi
+
+group "git worktree helper"
+tmp="$(mktemp -d)"
+(
+  set -e
+  cd "$tmp"
+  git init -q .
+  git -c user.email=smoke@claudex -c user.name=smoke commit -q --allow-empty -m init
+) >/dev/null 2>&1
+if [[ -d "$tmp/.git" ]]; then
+  # shellcheck source=/dev/null
+  source /usr/local/lib/claudex-lib.sh
+  result="$(CLAUDEX_WORKTREE=1 claudex_prepare_worktree "$tmp" smoke 2>/dev/null)"
+  if [[ "$result" == "$tmp/.worktrees/smoke" && -d "$result" ]]; then
+    ok "CLAUDEX_WORKTREE=1 creates a worktree"
+  else
+    bad "worktree helper returned '$result'"
+  fi
+  result_off="$(claudex_prepare_worktree "$tmp" smoke 2>/dev/null)"
+  if [[ "$result_off" == "$tmp" ]]; then
+    ok "worktree is off by default"
+  else
+    bad "worktree helper returned '$result_off' when disabled"
+  fi
+else
+  bad "could not create a scratch git repository"
+fi
+rm -rf "$tmp"
+
+group "agent"
+case "${CLAUDEX_AGENT:-none}" in
+  claude) version_of "claude" claude --version ;;
+  codex)  version_of "codex"  codex --version ;;
+  *)
+    if command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1; then
+      bad "CLAUDEX_AGENT is unset but an agent is installed; this looks like the base image with an agent in it"
+    else
+      ok "base image: no agent installed, as expected"
+    fi
+    ;;
+esac
+
+group "launchers"
+for cmd in claudex-claude claudex-codex claudex-upgrade claudex-entrypoint; do
+  check "$cmd is executable on PATH" bash -c "command -v $cmd"
+done
+# The launcher must refuse to start without a TTY rather than hanging.
+if [[ "${CLAUDEX_AGENT:-none}" == "claude" ]]; then
+  if out="$(CLAUDEX_WORKDIR=/tmp claudex-claude </dev/null 2>&1)"; then
+    bad "claudex-claude did not refuse to start without a TTY"
+  else
+    if printf '%s' "$out" | grep -q "no TTY attached"; then
+      ok "claudex-claude refuses to start without a TTY"
+    else
+      bad "claudex-claude failed for an unexpected reason"
+      note "$(printf '%s' "$out" | head -n3)"
+    fi
+  fi
+fi
+
+printf '\n%d passed, %d failed\n' "$pass" "$fail"
+[[ "$fail" -eq 0 ]] || exit $(( fail > 125 ? 125 : fail ))

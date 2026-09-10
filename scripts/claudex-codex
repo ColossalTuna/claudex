@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+#
+# Launch Codex as a headless remote-control app-server in CLAUDEX_WORKDIR.
+#
+# Unlike Claude Code's Remote Control, Codex's `remote-control` is designed to
+# run headless, so no TTY is required. CLAUDEX_PTY is still honoured if set.
+#
+# Environment:
+#   CLAUDEX_WORKDIR            directory to run in (default /workspace)
+#   CLAUDEX_WORKTREE           1 to run in a dedicated git worktree
+#   CLAUDEX_CODEX_LISTEN       listen address, e.g. ws://0.0.0.0:9742.
+#                              Unset means Codex's own default, which is
+#                              loopback-only. Exposing the app-server beyond
+#                              loopback is a deliberate opt-in.
+#   CLAUDEX_CODEX_TOKEN_FILE   path to a token file for WebSocket auth
+#   CLAUDEX_CODEX_ARGS         extra arguments, word-split
+#
+# Any arguments given to this script are appended last.
+set -euo pipefail
+
+# shellcheck source=/dev/null
+source /usr/local/lib/claudex-lib.sh
+
+workdir="$(claudex_resolve_workdir)"
+workdir="$(claudex_prepare_worktree "$workdir" codex)"
+cd "$workdir"
+
+if [[ ! -s "${CODEX_HOME:-$HOME/.codex}/auth.json" && -z "${OPENAI_API_KEY:-}" && -z "${CODEX_ACCESS_TOKEN:-}" ]]; then
+  claudex_log "warning: no ${CODEX_HOME:-$HOME/.codex}/auth.json and no OPENAI_API_KEY/CODEX_ACCESS_TOKEN."
+  claudex_log "  See CREDENTIALS.md; 'codex login --device-auth' also works from inside the container."
+fi
+
+args=(remote-control)
+
+# These flag names come from Codex's remote-control release notes rather than a
+# reference page, so they are passed only when explicitly requested. If a flag
+# name changes upstream, unset the variable and use CLAUDEX_CODEX_ARGS instead.
+if [[ -n "${CLAUDEX_CODEX_LISTEN:-}" ]]; then
+  args+=(--listen "${CLAUDEX_CODEX_LISTEN}")
+fi
+
+if [[ -n "${CLAUDEX_CODEX_TOKEN_FILE:-}" ]]; then
+  args+=(--ws-auth capability-token --ws-token-file "${CLAUDEX_CODEX_TOKEN_FILE}")
+elif [[ -n "${CLAUDEX_CODEX_LISTEN:-}" && "${CLAUDEX_CODEX_LISTEN}" != *127.0.0.1* && "${CLAUDEX_CODEX_LISTEN}" != *localhost* ]]; then
+  claudex_log "warning: listening on ${CLAUDEX_CODEX_LISTEN} without CLAUDEX_CODEX_TOKEN_FILE."
+  claudex_log "  Anything that can reach this port can drive the agent."
+fi
+
+if [[ -n "${CLAUDEX_CODEX_ARGS:-}" ]]; then
+  # Split on whitespace but do NOT glob: an unquoted expansion would also run
+  # pathname expansion, so `--cd *` would become the workspace listing.
+  read -ra extra <<< "$CLAUDEX_CODEX_ARGS"
+  args+=("${extra[@]}")
+fi
+
+args+=("$@")
+
+claudex_log "starting: codex ${args[*]} (cwd $workdir)"
+
+case "${CLAUDEX_PTY:-0}" in
+  1|true|yes|on) claudex_exec_agent codex "${args[@]}" ;;
+  *) exec codex "${args[@]}" ;;
+esac

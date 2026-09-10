@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+#
+# Launch Claude Code in Remote Control server mode in CLAUDEX_WORKDIR.
+#
+# Environment:
+#   CLAUDEX_WORKDIR           directory to run in (default /workspace)
+#   CLAUDEX_WORKTREE          1 to run in a dedicated git worktree
+#   CLAUDEX_PTY               1 to synthesize a PTY with script(1)
+#   CLAUDEX_SKIP_PERMISSIONS  1 to pass --dangerously-skip-permissions (off by default)
+#   CLAUDEX_CLAUDE_ARGS       extra arguments, word-split, appended after `remote-control`
+#
+# Any arguments given to this script are appended last.
+set -euo pipefail
+
+# shellcheck source=/dev/null
+source /usr/local/lib/claudex-lib.sh
+
+workdir="$(claudex_resolve_workdir)"
+workdir="$(claudex_prepare_worktree "$workdir" claude)"
+cd "$workdir"
+
+# Remote Control needs a claude.ai subscription OAuth session. CLAUDE_CODE_OAUTH_TOKEN
+# and ANTHROPIC_API_KEY authenticate model requests but cannot establish a Remote
+# Control session, so warn early rather than failing deep inside the agent.
+# https://code.claude.com/docs/en/authentication#generate-a-long-lived-token
+if [[ ! -s "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json" ]]; then
+  claudex_log "warning: no ${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json found."
+  claudex_log "  Remote Control requires a claude.ai login; API keys and CLAUDE_CODE_OAUTH_TOKEN are not accepted."
+  claudex_log "  See CREDENTIALS.md for how to seed one."
+fi
+
+for var in ANTHROPIC_BASE_URL DISABLE_TELEMETRY DO_NOT_TRACK CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC DISABLE_GROWTHBOOK; do
+  if [[ -n "${!var:-}" ]]; then
+    claudex_log "warning: $var is set, which disables Remote Control. Unset it."
+  fi
+done
+
+args=(remote-control)
+
+case "${CLAUDEX_SKIP_PERMISSIONS:-0}" in
+  1|true|yes|on) args+=(--dangerously-skip-permissions) ;;
+esac
+
+if [[ -n "${CLAUDEX_CLAUDE_ARGS:-}" ]]; then
+  # Split on whitespace but do NOT glob: an unquoted expansion would also run
+  # pathname expansion, so `--add-dir *` would become the workspace listing.
+  read -ra extra <<< "$CLAUDEX_CLAUDE_ARGS"
+  args+=("${extra[@]}")
+fi
+
+args+=("$@")
+
+claudex_log "starting: claude ${args[*]} (cwd $workdir)"
+claudex_exec_agent claude "${args[@]}"

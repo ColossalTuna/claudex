@@ -1,0 +1,43 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits"
+  ],
+  "labels": ["dependencies"],
+  "timezone": "Etc/UTC",
+
+  "packageRules": [
+    {
+      "description": "Base image digest. Pinned deliberately; Renovate keeps the pin from going stale.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["debian"],
+      "pinDigests": true
+    },
+    {
+      "description": "Tooling versions carried as Containerfile build args.",
+      "matchManagers": ["custom.regex"],
+      "groupName": "container tooling"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    }
+  ],
+
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions annotated with a `# renovate:` comment above an ARG",
+      "managerFilePatterns": ["/^Containerfile$/"],
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+versioning=(?<versioning>\\S+))?(?:\\s+extractVersion=(?<extractVersion>\\S+))?\\s*\\nARG \\w+=(?<currentValue>\\S+)"
+      ]
+    }
+  ],
+
+  "ignoreDeps": [
+    "@anthropic-ai/claude-code",
+    "@openai/codex"
+  ]
+}

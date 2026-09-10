@@ -1,0 +1,185 @@
+{{- if not (or .Values.claude.enabled .Values.codex.enabled) }}
+{{- fail "at least one of claude.enabled or codex.enabled must be true" }}
+{{- end }}
+{{- if and .Values.codex.enabled .Values.codex.listen (not .Values.codex.wsTokenSecret) }}
+{{- $listen := .Values.codex.listen }}
+{{- if not (or (contains "127.0.0.1" $listen) (contains "localhost" $listen) (contains "[::1]" $listen)) }}
+{{- fail "codex.listen binds the app-server beyond loopback without codex.wsTokenSecret. Anything that can reach that port can drive the agent with full workspace access. Set codex.wsTokenSecret, or bind to 127.0.0.1 (pod containers share a network namespace, so the claude container reaches it there)." }}
+{{- end }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "claudex.fullname" . }}
+  labels:
+    {{- include "claudex.labels" . | nindent 4 }}
+spec:
+  # The agents share a workspace volume and a network namespace, so this is a
+  # single pod by design and must not be scaled horizontally.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "claudex.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "claudex.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "claudex.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        {{- if .Values.claude.enabled }}
+        - name: claude
+          image: "{{ .Values.image.registry }}/{{ .Values.image.namespace }}/claudex-claude:{{ include "claudex.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Claude Code's Remote Control server needs a PTY. Without these the
+          # launcher exits with a clear message rather than hanging.
+          tty: {{ .Values.claude.tty }}
+          stdin: {{ .Values.claude.stdin }}
+          {{- with .Values.claude.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- include "claudex.commonEnv" . | nindent 12 }}
+            {{- range $key, $value := .Values.claude.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: claude-home
+              mountPath: /home/dev
+            {{- if .Values.credentials.secretName }}
+            - name: credentials
+              mountPath: /run/secrets/claudex
+              readOnly: true
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.claude.resources | nindent 12 }}
+        {{- end }}
+        {{- if .Values.codex.enabled }}
+        - name: codex
+          image: "{{ .Values.image.registry }}/{{ .Values.image.namespace }}/claudex-codex:{{ include "claudex.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          tty: {{ .Values.codex.tty }}
+          stdin: {{ .Values.codex.stdin }}
+          {{- with .Values.codex.args }}
+          args:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          env:
+            {{- include "claudex.commonEnv" . | nindent 12 }}
+            {{- if .Values.codex.listen }}
+            - name: CLAUDEX_CODEX_LISTEN
+              value: {{ .Values.codex.listen | quote }}
+            {{- end }}
+            {{- if .Values.codex.wsTokenSecret }}
+            - name: CLAUDEX_CODEX_TOKEN_FILE
+              value: /run/secrets/codex-ws/token
+            {{- end }}
+            {{- range $key, $value := .Values.codex.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          {{- if .Values.codex.listen }}
+          ports:
+            - name: app-server
+              containerPort: 9742
+              protocol: TCP
+          {{- end }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: codex-home
+              mountPath: /home/dev
+            {{- if .Values.credentials.secretName }}
+            - name: credentials
+              mountPath: /run/secrets/claudex
+              readOnly: true
+            {{- end }}
+            {{- if .Values.codex.wsTokenSecret }}
+            - name: codex-ws-token
+              mountPath: /run/secrets/codex-ws
+              readOnly: true
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.codex.resources | nindent 12 }}
+        {{- end }}
+      volumes:
+        - name: workspace
+          {{- if eq .Values.workspace.type "emptyDir" }}
+          emptyDir: {}
+          {{- else if eq .Values.workspace.type "existing" }}
+          persistentVolumeClaim:
+            claimName: {{ required "workspace.existingClaim is required when workspace.type is existing" .Values.workspace.existingClaim }}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: {{ include "claudex.fullname" . }}-workspace
+          {{- end }}
+        {{- /*
+          Declared only for an enabled agent. templates/pvc.yaml creates a home
+          PVC per enabled agent, so declaring both here would make the pod
+          reference a claim that was never created and leave it Pending.
+        */}}
+        {{- if .Values.claude.enabled }}
+        - name: claude-home
+          {{- if .Values.home.persist }}
+          persistentVolumeClaim:
+            claimName: {{ include "claudex.fullname" . }}-claude-home
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.codex.enabled }}
+        - name: codex-home
+          {{- if .Values.home.persist }}
+          persistentVolumeClaim:
+            claimName: {{ include "claudex.fullname" . }}-codex-home
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        {{- end }}
+        {{- if .Values.credentials.secretName }}
+        - name: credentials
+          secret:
+            secretName: {{ .Values.credentials.secretName }}
+            defaultMode: 0400
+        {{- end }}
+        {{- if .Values.codex.wsTokenSecret }}
+        - name: codex-ws-token
+          secret:
+            secretName: {{ .Values.codex.wsTokenSecret }}
+            defaultMode: 0400
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
