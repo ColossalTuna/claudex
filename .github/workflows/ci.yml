@@ -1,8 +1,20 @@
 name: ci
 
+# A branch with an open PR fires both `push` and `pull_request`. The two events
+# carry different `github.ref` values, so the concurrency group below cannot
+# dedupe them, and CI would run twice per commit, QEMU arm64 included.
+#
+# Skipping the redundant run with a job-level `if` does not work: the job still
+# produces a check run, so each required name ends up with two results on the
+# same SHA — one success, one skipped — and no single authoritative conclusion.
+# That leaves the PR unmergeable. Restricting `push` to the default branch is
+# the fix that actually produces one result per name.
+#
+# The cost is that a branch with no PR open gets no automatic CI. Use
+# `workflow_dispatch`, or open the PR early, or `make lint && make test`.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     tags-ignore: ["v*"]
   pull_request:
   workflow_dispatch:
@@ -14,21 +26,8 @@ concurrency:
 permissions:
   contents: read
 
-# Every job carries the same guard. A branch in this repository with an open PR
-# fires both `push` and `pull_request`, and the two events produce different
-# `github.ref` values, so the concurrency group above cannot dedupe them: CI
-# would run twice per commit, QEMU arm64 included.
-#
-# Restricting `push` to the default branch is the usual fix, but it gives up CI
-# on a branch before its PR exists, which is where this repository's first real
-# build failure was caught. So instead the `push` run always does the work, and
-# the redundant `pull_request` run is skipped for same-repository PRs. A fork
-# PR produces no `push` event here, so it keeps its `pull_request` run. Both
-# events report check runs against the same head SHA, so branch protection is
-# satisfied either way.
 jobs:
   lint:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,7 +60,6 @@ jobs:
   build:
     # Builds every image and proves it actually works. Nothing is pushed here;
     # publishing happens only on a v* tag, in release.yml.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -140,7 +138,6 @@ jobs:
     # arm64 is built but not smoke tested: running it here would need QEMU
     # emulation, which turns a two minute job into a very long one. The release
     # workflow publishes both architectures from the same Containerfile.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
